@@ -162,15 +162,16 @@ class StashDBClient:
         if tag_data.get('category'):
             category_name = tag_data['category'].get('name')
 
-        # Construct URL based on tag ID
-        url = f"https://stashdb.org/tags/{tag_data['id']}"
+        # Extract stash ID from tag ID
+        stash_id = tag_data['id']
 
         return Tag(
             name=tag_data['name'],
             description=tag_data.get('description') or '',
-            url=url,
+            stash_id=stash_id,
             aliases=tag_data.get('aliases', []),
-            category=category_name
+            category=category_name,
+            url=f"https://stashdb.org/tags/{stash_id}"
         )
 
     def find_tag(self, name: Optional[str] = None, tag_id: Optional[str] = None) -> Optional[Tag]:

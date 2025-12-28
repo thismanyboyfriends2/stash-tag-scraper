@@ -27,7 +27,7 @@ def fetch_and_transfer(config: Config, endpoint: str = "https://stashdb.org/grap
 
     # Transfer to Stash database
     logging.info(f"Transferring tags to Stash database at {config.stash_db_path}...")
-    transfer_tags(tags, config)
+    transfer_tags(tags, config, endpoint)
 
 
 def main():
