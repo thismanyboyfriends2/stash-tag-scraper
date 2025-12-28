@@ -9,9 +9,10 @@ class Tag:
     """Represents a tag from StashDB."""
     name: str
     description: str
-    url: str
+    stash_id: str
     aliases: list[str]
     category: Optional[str] = None
+    url: Optional[str] = None  # For internal use during scraping
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Tag':
@@ -25,16 +26,11 @@ class Tag:
         return cls(
             name=data['name'],
             description=data.get('description', ''),
-            url=data.get('url', ''),
+            stash_id=data.get('stash_id', ''),
+            url=data.get('url'),
             aliases=aliases,
             category=data.get('category')
         )
-
-    def get_description_with_url(self) -> str:
-        """Get formatted description with URL appended."""
-        if self.description:
-            return f"{self.description}\n{self.url}"
-        return self.url
 
 
 @dataclass
@@ -60,7 +56,7 @@ class Config:
         if stash_db_path:
             db_path = Path(stash_db_path)
         else:
-            default_path = os.getenv('STASH_DB_PATH', os.path.expanduser('~/.stash/stash-go.sqlite'))
+            default_path = os.getenv('STASH_DB_PATH', r'C:\stash\stash-go.sqlite')
             db_path = Path(default_path)
 
         # Validate database exists
