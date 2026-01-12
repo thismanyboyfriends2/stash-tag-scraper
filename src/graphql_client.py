@@ -4,21 +4,28 @@ Fetches tag information directly from the StashDB.org GraphQL endpoint.
 """
 import logging
 import requests
+import time
+import json
+from pathlib import Path
 from typing import List, Dict, Optional
+
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+from rich.console import Console
+
 from models import Tag
+
+logger = logging.getLogger(__name__)
 
 
 class StashDBClient:
     """Client for interacting with StashDB GraphQL API."""
 
-    def __init__(self, endpoint: str = "https://stashdb.org/graphql", api_key: str = None):
-        """
-        Initialize StashDB client.
+    CACHE_EXPIRY_HOURS = 24
+    CACHE_DIR = Path.home() / '.cache' / 'stash-tag-scraper'
+    CACHE_FILE = CACHE_DIR / 'tags.json'
 
-        Args:
-            endpoint: GraphQL endpoint URL
-            api_key: API key for authentication
-        """
+    def __init__(self, endpoint: str = "https://stashdb.org/graphql", api_key: str = None):
+        """Initialize StashDB client with endpoint and API key."""
         self.endpoint = endpoint
         self.api_key = api_key
 
@@ -33,53 +40,105 @@ class StashDBClient:
             'Content-Type': 'application/json'
         }
 
+    def _get_cache_file(self) -> Optional[dict]:
+        """Load tags from cache if valid (not expired)."""
+        if not self.CACHE_FILE.exists():
+            return None
+
+        try:
+            with open(self.CACHE_FILE, 'r') as f:
+                cache = json.load(f)
+
+            # Check if cache is expired
+            cache_time = cache.get('timestamp', 0)
+            age_hours = (time.time() - cache_time) / 3600
+            if age_hours > self.CACHE_EXPIRY_HOURS:
+                logger.debug(f"Cache expired ({age_hours:.1f}h old)")
+                return None
+
+            logger.info(f"Using cached tags ({age_hours:.1f}h old)")
+            return cache.get('tags', [])
+
+        except Exception as e:
+            logger.warning(f"Failed to read cache: {e}")
+            return None
+
+    def _save_cache_file(self, tags: List[dict]) -> None:
+        """Save tags to cache with timestamp."""
+        try:
+            self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache = {
+                'timestamp': time.time(),
+                'tags': tags
+            }
+            with open(self.CACHE_FILE, 'w') as f:
+                json.dump(cache, f)
+            logger.debug(f"Saved {len(tags)} tags to cache")
+        except Exception as e:
+            logger.warning(f"Failed to save cache: {e}")
+
+    @staticmethod
+    def clear_cache() -> None:
+        """Remove cache file."""
+        try:
+            StashDBClient.CACHE_FILE.unlink()
+            logger.info("Cache cleared")
+        except FileNotFoundError:
+            logger.debug("Cache file not found")
+
     def _execute_query(self, query: str, variables: Optional[Dict] = None) -> Dict:
-        """
-        Execute a GraphQL query.
-
-        Args:
-            query: GraphQL query string
-            variables: Query variables
-
-        Returns:
-            Query response data
-
-        Raises:
-            requests.exceptions.RequestException: If request fails
-            ValueError: If GraphQL returns errors
-        """
+        """Execute a GraphQL query with retry logic for transient errors."""
         payload = {'query': query}
         if variables:
             payload['variables'] = variables
 
-        try:
-            response = requests.post(
-                self.endpoint,
-                json=payload,
-                headers=self.headers,
-                timeout=30
-            )
-            response.raise_for_status()
+        max_retries = 3
+        base_delay = 1
 
-            result = response.json()
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    self.endpoint,
+                    json=payload,
+                    headers=self.headers,
+                    timeout=60
+                )
+                response.raise_for_status()
 
-            if 'errors' in result:
-                error_messages = [err.get('message', str(err)) for err in result['errors']]
-                raise ValueError(f"GraphQL errors: {', '.join(error_messages)}")
+                result = response.json()
 
-            return result.get('data', {})
+                if 'errors' in result:
+                    error_messages = [err.get('message', str(err)) for err in result['errors']]
+                    raise ValueError(f"GraphQL errors: {', '.join(error_messages)}")
 
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Request failed: {e}")
-            raise
+                return result.get('data', {})
 
-    def query_all_tags(self) -> List[Tag]:
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Transient error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"Request failed after {max_retries} attempts: {e}")
+                    raise
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request failed: {e}")
+                raise
+
+    def query_all_tags(self, use_cache: bool = True) -> List[Tag]:
+        """Fetch all tags from StashDB using pagination.
+
+        Args:
+            use_cache: If True, use cached tags if available and not expired.
         """
-        Fetch all tags from StashDB using pagination.
+        # Check cache first
+        if use_cache:
+            cached_tag_dicts = self._get_cache_file()
+            if cached_tag_dicts is not None:
+                tags = [self._tag_from_graphql_dict(tag_dict) for tag_dict in cached_tag_dicts]
+                logger.info(f"Loaded {len(tags)} tags from cache")
+                return tags
 
-        Returns:
-            List of Tag objects
-        """
         query = """
         query QueryTags($input: TagQueryInput!) {
             queryTags(input: $input) {
@@ -103,66 +162,77 @@ class StashDBClient:
 
         per_page: int = 100
         all_tags = []
+        all_tag_dicts = []  # Store raw dicts for caching
         page = 1
         total_count = None
 
-        while True:
-            variables = {
-                'input': {
-                    'page': page,
-                    'per_page': per_page,
-                    'sort': 'NAME',
-                    'direction': 'ASC'
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            console=Console()
+        ) as progress:
+            task = progress.add_task("Fetching tags from StashDB", total=None)
+
+            while True:
+                variables = {
+                    'input': {
+                        'page': page,
+                        'per_page': per_page,
+                        'sort': 'NAME',
+                        'direction': 'ASC'
+                    }
                 }
-            }
 
-            try:
-                data = self._execute_query(query, variables)
-                result = data.get('queryTags', {})
+                try:
+                    data = self._execute_query(query, variables)
 
-                tags = result.get('tags', [])
-                if total_count is None:
-                    total_count = result.get('count', 0)
-                    logging.info(f"Fetching {total_count} tags from StashDB...")
+                    if 'queryTags' not in data:
+                        raise ValueError("Invalid StashDB response: missing 'queryTags' field")
 
-                # Filter out deleted tags and convert to Tag objects
-                active_tags = [
-                    self._tag_from_graphql(tag)
-                    for tag in tags
-                    if not tag.get('deleted', False)
-                ]
-                all_tags.extend(active_tags)
+                    result = data['queryTags']
 
-                logging.info(f"Fetched page {page}: {len(tags)} tags ({len(all_tags)}/{total_count} total)")
+                    if 'tags' not in result or 'count' not in result:
+                        raise ValueError("Invalid StashDB response: missing 'tags' or 'count' in queryTags")
 
-                # Check if we've fetched all tags
-                if len(tags) < per_page or len(all_tags) >= total_count:
-                    break
+                    tags = result['tags']
+                    if total_count is None:
+                        total_count = result['count']
+                        progress.update(task, total=total_count)
 
-                page += 1
+                    # Filter out deleted tags and convert to Tag objects
+                    active_tags = [
+                        self._tag_from_graphql(tag)
+                        for tag in tags
+                        if not tag.get('deleted', False)
+                    ]
+                    # Store non-deleted dicts for caching
+                    all_tag_dicts.extend([tag for tag in tags if not tag.get('deleted', False)])
+                    all_tags.extend(active_tags)
+                    progress.update(task, completed=len(all_tags))
 
-            except Exception as e:
-                logging.error(f"Failed to fetch page {page}: {e}")
-                raise
+                    # Check if we've fetched all tags (last page has fewer items)
+                    if len(tags) < per_page:
+                        break
 
-        logging.info(f"Successfully fetched {len(all_tags)} active tags")
+                    page += 1
+
+                except Exception as e:
+                    logger.error(f"Failed to fetch page {page}: {e}")
+                    raise
+
+        logger.info(f"Successfully fetched {len(all_tags)} active tags")
+        # Save to cache
+        self._save_cache_file(all_tag_dicts)
         return all_tags
 
     def _tag_from_graphql(self, tag_data: Dict) -> Tag:
-        """
-        Convert GraphQL tag response to Tag object.
-
-        Args:
-            tag_data: Tag dictionary from GraphQL response
-
-        Returns:
-            Tag object
-        """
+        """Convert GraphQL tag response to Tag object."""
         category_name = None
         if tag_data.get('category'):
             category_name = tag_data['category'].get('name')
 
-        # Extract stash ID from tag ID
         stash_id = tag_data['id']
 
         return Tag(
@@ -174,17 +244,12 @@ class StashDBClient:
             url=f"https://stashdb.org/tags/{stash_id}"
         )
 
+    def _tag_from_graphql_dict(self, tag_data: Dict) -> Tag:
+        """Convert cached or GraphQL tag dict to Tag object. Alias for _tag_from_graphql."""
+        return self._tag_from_graphql(tag_data)
+
     def find_tag(self, name: Optional[str] = None, tag_id: Optional[str] = None) -> Optional[Tag]:
-        """
-        Find a single tag by name or ID.
-
-        Args:
-            name: Tag name
-            tag_id: Tag ID
-
-        Returns:
-            Tag object or None if not found
-        """
+        """Find a tag by name or ID."""
         query = """
         query FindTag($name: String, $id: ID) {
             findTag(name: $name, id: $id) {
@@ -222,5 +287,5 @@ class StashDBClient:
             return None
 
         except Exception as e:
-            logging.error(f"Failed to find tag: {e}")
+            logger.error(f"Failed to find tag: {e}")
             return None

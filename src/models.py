@@ -1,7 +1,7 @@
 """Data models for the stash tag scraper."""
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -16,11 +16,19 @@ class Tag:
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Tag':
-        """Create Tag from dictionary (e.g., from GraphQL response)."""
+        """Create Tag from dictionary."""
         aliases = data.get('aliases', '')
+
+        # Normalise aliases to list of strings
         if isinstance(aliases, str):
             aliases = [a.strip() for a in aliases.split(',') if a.strip()]
+        elif isinstance(aliases, list):
+            # Filter to strings only, strip whitespace
+            aliases = [str(a).strip() for a in aliases if a and str(a).strip()]
         elif aliases is None:
+            aliases = []
+        else:
+            # Invalid type, treat as empty
             aliases = []
 
         return cls(
@@ -34,17 +42,56 @@ class Tag:
 
 
 @dataclass
+class StashConnection:
+    """Configuration for connecting to a local Stash instance via GraphQL."""
+    scheme: str = "http"
+    host: str = "localhost"
+    port: int = 9999
+    api_key: Optional[str] = None
+
+    def to_connection_dict(self) -> dict:
+        """Convert to connection dictionary."""
+        conn = {
+            "Scheme": self.scheme,
+            "Host": self.host,
+            "Port": self.port,
+        }
+        if self.api_key:
+            conn["ApiKey"] = self.api_key
+        return conn
+
+    @classmethod
+    def from_env(cls) -> 'StashConnection':
+        """Create StashConnection from STASH_ENDPOINT env var."""
+        import os
+
+        endpoint = os.getenv('STASH_ENDPOINT', 'http://localhost:9999')
+        parsed = urlparse(endpoint)
+        return cls(
+            scheme=parsed.scheme or 'http',
+            host=parsed.hostname or 'localhost',
+            port=parsed.port or 9999,
+            api_key=os.getenv('STASH_API_KEY'),
+        )
+
+
+@dataclass
 class Config:
     """Configuration for the stash tag scraper."""
     stashdb_api_key: str
-    stash_db_path: Path
+    ignored_aliases: list[str] = None  # Aliases to skip during merge
+
+    def __post_init__(self):
+        """Initialise ignored_aliases if not provided."""
+        if self.ignored_aliases is None:
+            self.ignored_aliases = []
 
     @classmethod
-    def from_env(cls, stash_db_path: Optional[str] = None) -> 'Config':
-        """Create Config from environment variables and validate paths."""
+    def from_env(cls) -> 'Config':
+        """Create Config from STASHDB_API_KEY environment variable and load ignored aliases from file."""
         import os
+        from pathlib import Path
 
-        # Validate API key
         api_key = os.getenv('STASHDB_API_KEY')
         if not api_key:
             raise ValueError(
@@ -52,30 +99,11 @@ class Config:
                 "Get your API key from https://stashdb.org/register"
             )
 
-        # Determine database path
-        if stash_db_path:
-            db_path = Path(stash_db_path)
-        else:
-            default_path = os.getenv('STASH_DB_PATH', r'C:\stash\stash-go.sqlite')
-            db_path = Path(default_path)
+        # Load ignored aliases from .ignored_aliases file if it exists
+        ignored_aliases = []
+        ignored_file = Path.cwd() / '.ignored_aliases'
+        if ignored_file.exists():
+            with open(ignored_file, 'r') as f:
+                ignored_aliases = [line.strip() for line in f if line.strip() and not line.startswith('#')]
 
-        # Validate database exists
-        if not db_path.exists():
-            raise FileNotFoundError(
-                f"Stash database not found at: {db_path}\n"
-                f"Please specify the correct path using:\n"
-                f"  --stash-db /path/to/stash-go.sqlite\n"
-                f"or set the STASH_DB_PATH environment variable"
-            )
-
-        # Validate it's a file
-        if not db_path.is_file():
-            raise ValueError(
-                f"Stash database path is not a file: {db_path}"
-            )
-
-
-        return cls(
-            stashdb_api_key=api_key,
-            stash_db_path=db_path,
-        )
+        return cls(stashdb_api_key=api_key, ignored_aliases=ignored_aliases)

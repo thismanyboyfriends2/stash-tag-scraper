@@ -2,32 +2,35 @@
 """
 StashDB Tag Scraper CLI
 
-Fetches tag information from StashDB via GraphQL API and transfers to local Stash instance.
+Fetches tag information from StashDB via GraphQL API and transfers to local Stash.
 """
 import sys
 import logging
 import argparse
+import asyncio
+
+from rich.logging import RichHandler
 
 from graphql_client import StashDBClient
-from stash_tags import transfer_tags
-from models import Config
+from stash_tags import transfer_tags_graphql
+from stash_client import StashClient
+from models import Config, StashConnection
 
-def fetch_and_transfer(config: Config, endpoint: str = "https://stashdb.org/graphql"):
-    """Fetch tags from StashDB and transfer directly to Stash database."""
-    # Initialize GraphQL client
-    client = StashDBClient(
-        endpoint=endpoint,
-        api_key=config.stashdb_api_key
-    )
-
-    # Fetch all tags from StashDB
+async def fetch_and_transfer(config: Config, endpoint: str = "https://stashdb.org/graphql", use_cache: bool = True):
+    """Fetch tags from StashDB and transfer to Stash via GraphQL."""
     logging.info("Fetching tags from StashDB GraphQL API...")
-    tags = client.query_all_tags()
-    logging.info(f"Fetched {len(tags)} tags")
+    client = StashDBClient(endpoint=endpoint, api_key=config.stashdb_api_key)
+    tags = client.query_all_tags(use_cache=use_cache)
+    logging.info(f"Fetched {len(tags)} tags from StashDB")
 
-    # Transfer to Stash database
-    logging.info(f"Transferring tags to Stash database at {config.stash_db_path}...")
-    transfer_tags(tags, config, endpoint)
+    logging.info("Connecting to local Stash GraphQL API...")
+    stash_conn = StashConnection.from_env()
+
+    async with StashClient(stash_conn) as stash_client:
+        logging.info("Transferring tags to Stash...")
+        await transfer_tags_graphql(stash_client, tags, config)
+
+    logging.info("Transfer completed successfully")
 
 
 def main():
@@ -40,14 +43,14 @@ Examples:
   # Fetch and transfer tags
   %(prog)s
 
-  # Use custom database path
-  %(prog)s --stash-db /path/to/stash.db
-
   # Use custom API endpoint
   %(prog)s --endpoint https://custom.stashdb.org/graphql
 
-  # Enable verbose logging
+  # Enable verbose logging (app logs only)
   %(prog)s --verbose
+
+  # Enable very verbose logging (includes library debug logs)
+  %(prog)s -vv
         """
     )
 
@@ -63,14 +66,10 @@ Examples:
     )
 
     parser.add_argument(
-        '--stash-db',
-        help='Path to Stash database (default: $STASH_DB_PATH or ~/.stash/stash-go.sqlite)'
-    )
-
-    parser.add_argument(
         '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose logging'
+        action='count',
+        default=0,
+        help='Enable verbose logging (-v for verbose, -vv for very verbose)'
     )
 
     parser.add_argument(
@@ -79,40 +78,66 @@ Examples:
         help='Suppress all non-error output'
     )
 
+    parser.add_argument(
+        '--no-cache',
+        action='store_true',
+        help='Do not use cached tags, always fetch from StashDB'
+    )
+
+    parser.add_argument(
+        '--clear-cache',
+        action='store_true',
+        help='Clear the tag cache and exit'
+    )
+
     args = parser.parse_args()
 
-    # Configure logging
+    # Handle cache clearing early
+    if args.clear_cache:
+        StashDBClient.clear_cache()
+        return
+
     if args.quiet:
         log_level = logging.ERROR
-    elif args.verbose:
+    elif args.verbose >= 1:
         log_level = logging.DEBUG
     else:
         log_level = logging.INFO
 
     logging.basicConfig(
         level=log_level,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        format='%(message)s',
+        handlers=[RichHandler(rich_tracebacks=True, show_time=True)]
     )
 
-    # Execute command
+    # Suppress noisy library logs
+    if args.quiet:
+        logging.getLogger('httpx').setLevel(logging.ERROR)
+        logging.getLogger('httpcore').setLevel(logging.ERROR)
+        logging.getLogger('gql').setLevel(logging.ERROR)
+        logging.getLogger('stash_graphql_client').setLevel(logging.ERROR)
+    elif args.verbose >= 2:
+        # Very verbose: show everything including stash_graphql_client
+        pass
+    else:
+        # Normal or verbose mode: suppress library noise
+        logging.getLogger('httpx').setLevel(logging.WARNING)
+        logging.getLogger('httpcore').setLevel(logging.WARNING)
+        logging.getLogger('gql').setLevel(logging.WARNING)
+        logging.getLogger('stash_graphql_client').setLevel(logging.WARNING)
+
     try:
-        # Create and validate configuration (fails fast if config is wrong)
         try:
-            config = Config.from_env(stash_db_path=args.stash_db)
-        except (ValueError, FileNotFoundError) as e:
+            config = Config.from_env()
+        except ValueError as e:
             logging.error(f"Configuration error: {e}")
             sys.exit(1)
 
-        # Override API key if provided via CLI
         if args.api_key:
             config.stashdb_api_key = args.api_key
 
-        # Fetch and transfer tags
-        fetch_and_transfer(
-            config=config,
-            endpoint=args.endpoint
-        )
-
+        use_cache = not args.no_cache
+        asyncio.run(fetch_and_transfer(config, args.endpoint, use_cache=use_cache))
         logging.info("All operations completed successfully")
 
     except KeyboardInterrupt:
