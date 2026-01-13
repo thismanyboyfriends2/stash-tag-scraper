@@ -2,7 +2,6 @@
 import logging
 from typing import Dict, List, Optional, Tuple
 
-from rich.progress import Progress
 from stash_graphql_client import StashContext
 from stash_graphql_client.types import Tag as GraphQLTag
 
@@ -243,7 +242,7 @@ class StashClient:
     async def update_tags_batch(
         self,
         tags_with_ids: List[Tuple],
-        progress: Optional[Progress] = None,
+        progress: Optional[object] = None,
         task_id: Optional[int] = None
     ) -> int:
         """Update multiple tags individually with stash_ids, returns count of successful updates.

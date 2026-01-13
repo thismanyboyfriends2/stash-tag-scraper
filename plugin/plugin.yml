@@ -1,0 +1,34 @@
+name: StashDB Tag Synchroniser
+description: Synchronises tags from StashDB to your local Stash instance via GraphQL
+version: 1.0.2
+url: https://github.com/thismanyboyfriends/stash-tag-scraper
+exec:
+  - python3
+  - "{pluginDir}/stashdb_tag_sync.py"
+interface: raw
+tasks:
+  - name: Synchronise Tags from StashDB
+    description: Fetches all tags from StashDB and updates your local Stash instance
+    defaultArgs:
+      mode: sync
+settings:
+  stashdbApiKey:
+    displayName: StashDB API Key
+    type: STRING
+    description: "Your StashDB API key from https://stashdb.org/register"
+  stashdbEndpoint:
+    displayName: StashDB Endpoint
+    type: STRING
+    description: "StashDB GraphQL endpoint (default: https://stashdb.org/graphql)"
+  useCache:
+    displayName: Use Cache
+    type: BOOLEAN
+    description: Use cached tags if available (24 hour expiry)
+  verboseLogging:
+    displayName: Verbose Logging
+    type: BOOLEAN
+    description: Enable detailed debug logging
+  ignoredAliasesFile:
+    displayName: Ignored Aliases File Path
+    type: STRING
+    description: "Optional path to file containing aliases to ignore (one per line, # for comments)"

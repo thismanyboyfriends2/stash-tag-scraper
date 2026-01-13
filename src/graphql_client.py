@@ -9,9 +9,6 @@ import json
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
-from rich.console import Console
-
 from models import Tag
 
 logger = logging.getLogger(__name__)
@@ -32,7 +29,7 @@ class StashDBClient:
         if not self.api_key:
             raise ValueError(
                 "StashDB API key is required. "
-                "Pass api_key parameter or use Config.from_env()."
+                "Configure StashDB in Stash Settings → Metadata Providers → StashDB."
             )
 
         self.headers = {
@@ -166,61 +163,54 @@ class StashDBClient:
         page = 1
         total_count = None
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            console=Console()
-        ) as progress:
-            task = progress.add_task("Fetching tags from StashDB", total=None)
+        logger.info("Fetching tags from StashDB")
 
-            while True:
-                variables = {
-                    'input': {
-                        'page': page,
-                        'per_page': per_page,
-                        'sort': 'NAME',
-                        'direction': 'ASC'
-                    }
+        while True:
+            variables = {
+                'input': {
+                    'page': page,
+                    'per_page': per_page,
+                    'sort': 'NAME',
+                    'direction': 'ASC'
                 }
+            }
 
-                try:
-                    data = self._execute_query(query, variables)
+            try:
+                data = self._execute_query(query, variables)
 
-                    if 'queryTags' not in data:
-                        raise ValueError("Invalid StashDB response: missing 'queryTags' field")
+                if 'queryTags' not in data:
+                    raise ValueError("Invalid StashDB response: missing 'queryTags' field")
 
-                    result = data['queryTags']
+                result = data['queryTags']
 
-                    if 'tags' not in result or 'count' not in result:
-                        raise ValueError("Invalid StashDB response: missing 'tags' or 'count' in queryTags")
+                if 'tags' not in result or 'count' not in result:
+                    raise ValueError("Invalid StashDB response: missing 'tags' or 'count' in queryTags")
 
-                    tags = result['tags']
-                    if total_count is None:
-                        total_count = result['count']
-                        progress.update(task, total=total_count)
+                tags = result['tags']
+                if total_count is None:
+                    total_count = result['count']
+                    logger.debug(f"Fetching {total_count} tags total")
 
-                    # Filter out deleted tags and convert to Tag objects
-                    active_tags = [
-                        self._tag_from_graphql(tag)
-                        for tag in tags
-                        if not tag.get('deleted', False)
-                    ]
-                    # Store non-deleted dicts for caching
-                    all_tag_dicts.extend([tag for tag in tags if not tag.get('deleted', False)])
-                    all_tags.extend(active_tags)
-                    progress.update(task, completed=len(all_tags))
+                # Filter out deleted tags and convert to Tag objects
+                active_tags = [
+                    self._tag_from_graphql(tag)
+                    for tag in tags
+                    if not tag.get('deleted', False)
+                ]
+                # Store non-deleted dicts for caching
+                all_tag_dicts.extend([tag for tag in tags if not tag.get('deleted', False)])
+                all_tags.extend(active_tags)
+                logger.debug(f"Fetched {len(all_tags)} tags so far")
 
-                    # Check if we've fetched all tags (last page has fewer items)
-                    if len(tags) < per_page:
-                        break
+                # Check if we've fetched all tags (last page has fewer items)
+                if len(tags) < per_page:
+                    break
 
-                    page += 1
+                page += 1
 
-                except Exception as e:
-                    logger.error(f"Failed to fetch page {page}: {e}")
-                    raise
+            except Exception as e:
+                logger.error(f"Failed to fetch page {page}: {e}")
+                raise
 
         logger.info(f"Successfully fetched {len(all_tags)} active tags")
         # Save to cache

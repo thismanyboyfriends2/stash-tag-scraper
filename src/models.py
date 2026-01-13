@@ -1,7 +1,6 @@
 """Data models for the stash tag scraper."""
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse
 
 
 @dataclass
@@ -60,19 +59,6 @@ class StashConnection:
             conn["ApiKey"] = self.api_key
         return conn
 
-    @classmethod
-    def from_env(cls) -> 'StashConnection':
-        """Create StashConnection from STASH_ENDPOINT env var."""
-        import os
-
-        endpoint = os.getenv('STASH_ENDPOINT', 'http://localhost:9999')
-        parsed = urlparse(endpoint)
-        return cls(
-            scheme=parsed.scheme or 'http',
-            host=parsed.hostname or 'localhost',
-            port=parsed.port or 9999,
-            api_key=os.getenv('STASH_API_KEY'),
-        )
 
 
 @dataclass
@@ -86,24 +72,3 @@ class Config:
         if self.ignored_aliases is None:
             self.ignored_aliases = []
 
-    @classmethod
-    def from_env(cls) -> 'Config':
-        """Create Config from STASHDB_API_KEY environment variable and load ignored aliases from file."""
-        import os
-        from pathlib import Path
-
-        api_key = os.getenv('STASHDB_API_KEY')
-        if not api_key:
-            raise ValueError(
-                "STASHDB_API_KEY environment variable is required.\n"
-                "Get your API key from https://stashdb.org/register"
-            )
-
-        # Load ignored aliases from .ignored_aliases file if it exists
-        ignored_aliases = []
-        ignored_file = Path.cwd() / '.ignored_aliases'
-        if ignored_file.exists():
-            with open(ignored_file, 'r') as f:
-                ignored_aliases = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-
-        return cls(stashdb_api_key=api_key, ignored_aliases=ignored_aliases)

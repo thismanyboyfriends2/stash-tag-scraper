@@ -1,68 +1,76 @@
 # Stash Tag Scraper
 
-Fetches tags from [StashDB](https://stashdb.org) and transfers them directly to your local Stash instance via GraphQL.
+A Stash plugin that fetches tags from [StashDB](https://stashdb.org) and synchronises them directly to your local Stash instance.
 
 ## Requirements
 
 - Python 3.12+
+- Stash instance with GraphQL API enabled
 - StashDB account and API key ([register here](https://stashdb.org/register))
-- Local Stash instance running (GraphQL API enabled)
 
 ## Installation
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/thismanyboyfriends/stash-tag-scraper.git
-   cd stash-tag-scraper
-   ```
+Follow these steps to install the plugin:
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Windows
+```cmd
+REM Create plugin directory
+mkdir "C:\stash\plugins\stashdb-tag-sync"
 
-3. Set environment variables:
-   ```bash
-   export STASHDB_API_KEY="your-stashdb-api-key"
-   export STASH_ENDPOINT="http://localhost:9999"  # optional, defaults to this
-   ```
+REM Copy files (use File Explorer or these commands)
+xcopy plugin\plugin.yml "C:\stash\plugins\stashdb-tag-sync\" /Y
+xcopy plugin\stashdb_tag_sync.py "C:\stash\plugins\stashdb-tag-sync\" /Y
+xcopy src "C:\stash\plugins\stashdb-tag-sync\src" /E /Y
 
-   Or create a `.env` file with these variables (see `.env.example`)
-
-## Usage
-
-### Quick Start
-
-Run the script:
-
-```bash
-python src/main.py
+REM Install dependencies
+python -m pip install -r requirements.txt
 ```
 
-### Command-Line Options
-
+### Linux/macOS
 ```bash
-usage: main.py [-h] [--api-key API_KEY] [--endpoint ENDPOINT]
-               [--verbose] [--quiet]
+# Create plugin directory
+mkdir -p ~/.stash/plugins/stashdb-tag-sync
 
-Options:
-  --api-key API_KEY     StashDB API key (defaults to STASHDB_API_KEY env var)
-  --endpoint ENDPOINT   StashDB GraphQL endpoint (default: https://stashdb.org/graphql)
-  -v, --verbose         Enable verbose logging with detailed output
-  -q, --quiet           Suppress all non-error output
-  -h, --help            Show this help message
+# Copy plugin files
+cp plugin/plugin.yml ~/.stash/plugins/stashdb-tag-sync/
+cp plugin/stashdb_tag_sync.py ~/.stash/plugins/stashdb-tag-sync/
+cp -r src ~/.stash/plugins/stashdb-tag-sync/
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-## Configuration
+### Post-Installation Setup
 
-### Required Environment Variables
+After installing plugin files:
 
-- `STASHDB_API_KEY`: Your StashDB API key (get from [StashDB register](https://stashdb.org/register))
+1. **Reload plugins in Stash UI:**
+   - Go to Settings (gear icon, bottom right)
+   - Click "Plugins"
+   - Click "Reload" button
+   - You should see "StashDB Tag Synchroniser" appear
 
-### Optional Environment Variables
+2. **Configure plugin settings:**
+   - In Settings > Plugins > StashDB Tag Synchroniser
+   - Paste your StashDB API key (get from https://stashdb.org/register)
+   - Optionally adjust other settings
 
-- `STASH_ENDPOINT`: Your local Stash GraphQL endpoint (default: `http://localhost:9999`)
-- `STASH_API_KEY`: API key for local Stash authentication (only if your Stash requires it)
+3. **Run the plugin:**
+   - Go to Tasks page
+   - Find "Synchronise Tags from StashDB"
+   - Click it to start synchronisation
+   - Monitor progress in task log
+
+### Plugin Configuration
+
+Configure these settings via Stash UI:
+
+- **StashDB API Key**: Your StashDB API key (required)
+- **StashDB Endpoint**: GraphQL endpoint (default: https://stashdb.org/graphql)
+- **Use Cache**: Cache tags for 24 hours (default: enabled)
+- **Verbose Logging**: Enable debug logs (default: disabled)
+- **Ignored Aliases File Path**: Path to file with aliases to exclude (optional)
+
 
 ## Notes
 
